@@ -1,6 +1,10 @@
 # Jimaku Player Reloaded
 ## 字幕プレーヤー・リローデッド
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="Jimaku Player Reloaded rendering a Japanese subtitle over a Crunchyroll episode">
+</p>
+
 A userscript that adds a Japanese-subtitle layer to the Crunchyroll player. It browses [jimaku.cc](https://jimaku.cc), downloads `.srt` / `.ass` / `.vtt` files for the show you're watching, and renders them on top of the video — synced with one keypress.
 
 Built for studying Japanese with anime.
@@ -64,6 +68,18 @@ That's the whole flow. Once a show is anchored, every subsequent episode loads w
 ### Click a line
 
 Clicking a rendered subtitle opens [jisho.org](https://jisho.org) for that text. Useful for looking up unknown words mid-episode.
+
+### Review what you pick up
+
+<a href="https://apps.apple.com/es/app/meku/id6759989326?l=en-GB"><img src="https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/4f/02/52/4f02526b-c1c1-b7fe-46da-b18fbe2f7718/AppIcon-0-0-1x_U007epad-0-1-85-220.png/512x512bb.jpg" width="96" align="right" alt="Meku app icon"></a>
+
+Looking words up mid-episode is only half the loop — the other half is actually retaining them. [**Meku**](https://apps.apple.com/es/app/meku/id6759989326?l=en-GB) (iOS) is a flashcards app built for exactly this: drop in the vocab and sentences you find while watching, and review them later. Pairs naturally with this script — encounter a word on Crunchyroll, look it up on jisho, drill it on Meku.
+
+<p align="center">
+  <a href="https://apps.apple.com/es/app/meku/id6759989326?l=en-GB">
+    <img src="https://is1-ssl.mzstatic.com/image/thumb/PurpleSource221/v4/8e/e7/25/8ee72521-c6b0-92a9-48b8-c9872adc28e9/ios_1_1.png/600x1300bb.png" width="200" alt="Meku — Study with spaced repetitions">
+  </a>
+</p>
 
 ## Limitations
 
