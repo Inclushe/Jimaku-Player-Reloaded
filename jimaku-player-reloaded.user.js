@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Reloaded
 // @namespace    https://github.com/mgp25/jimaku-player-reloaded
-// @version      3.2.1
+// @version      3.2.2
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       mgp25
 // @match        *://*/*
@@ -1322,7 +1322,18 @@
 			watch();
 		});
 	}
-	new MutationObserver(scheduleWatch).observe(document.documentElement, { childList: true, subtree: true });
+	// Watch structural changes AND the places we read the title from — the
+	// player's `title` attribute, the `<title>` element text, and the og:title
+	// `content` attribute — so when the title source updates (typically right
+	// after a remount) we re-detect and use the new title immediately rather than
+	// waiting on the heartbeat. rAF coalescing keeps this cheap despite the churn.
+	new MutationObserver(scheduleWatch).observe(document.documentElement, {
+		childList: true,
+		subtree: true,
+		characterData: true,
+		attributes: true,
+		attributeFilter: ['title', 'content'],
+	});
 	window.addEventListener('popstate', watch);
 	window.addEventListener('hashchange', watch);
 	watch();
