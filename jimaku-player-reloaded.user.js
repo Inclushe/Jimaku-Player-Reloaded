@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Reloaded
 // @namespace    https://github.com/mgp25/jimaku-player-reloaded
-// @version      3.5.0
+// @version      3.6.0
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       mgp25
 // @match        *://*/*
@@ -608,9 +608,19 @@
 	#jp-panel.open { display: flex; }
 	#jp-panel header {
 		display: flex; align-items: center; gap: 8px;
-		padding: 10px 12px; background: linear-gradient(135deg,#e83450,#ff6b6b);
-		font-weight: 700;
+		padding: 10px 12px; font-weight: 700;
+		/* Light checkerboard over the red gradient signals the bar is draggable. */
+		background-color: #e83450;
+		background-image:
+			linear-gradient(45deg, rgba(255,255,255,.16) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.16) 75%),
+			linear-gradient(45deg, rgba(255,255,255,.16) 25%, transparent 25%, transparent 75%, rgba(255,255,255,.16) 75%),
+			linear-gradient(135deg, #e83450, #ff6b6b);
+		background-size: 14px 14px, 14px 14px, 100% 100%;
+		background-position: 0 0, 7px 7px, 0 0;
+		cursor: grab; user-select: none; touch-action: none;
 	}
+	#jp-panel.dragging { cursor: grabbing; }
+	#jp-panel.dragging header { cursor: grabbing; }
 	#jp-panel header .title { flex: 1; }
 	#jp-panel header button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 18px; }
 	#jp-panel .tabs { display: flex; border-bottom: 1px solid #2c2c3a; }
@@ -684,6 +694,9 @@
 	var panel = null;
 	var overlay = null;
 	var revealedOnce = false;
+	var dragging = false;
+	var dragDX = 0;
+	var dragDY = 0;
 
 	function ensureStyles() {
 		if (document.getElementById('jp-styles')) return;
@@ -751,6 +764,13 @@
 			['click', 'mousedown', 'mouseup', 'dblclick'].forEach((evt) => {
 				panel.addEventListener(evt, (e) => e.stopPropagation());
 			});
+			// Drag the panel by its title bar. Pointer capture (set on the panel,
+			// which persists across re-renders) keeps tracking even when the cursor
+			// leaves the bar, and works for both mouse and touch.
+			panel.addEventListener('pointerdown', onPanelGrab);
+			panel.addEventListener('pointermove', onPanelDrag);
+			panel.addEventListener('pointerup', onPanelRelease);
+			panel.addEventListener('pointercancel', onPanelRelease);
 			document.body.appendChild(panel);
 
 			const subTextEl = overlay.querySelector('#jp-overlay-text');
@@ -782,6 +802,41 @@
 		if (panel) panel.classList.toggle('open', open);
 		if (fab) fab.classList.toggle('has-active', open);
 		if (open) renderPanel();
+	}
+
+	function onPanelGrab(e) {
+		// Only the header bar drags — and never the close button inside it.
+		const header = e.target.closest('header');
+		if (!header || !panel.contains(header) || e.target.closest('button')) return;
+		const r = panel.getBoundingClientRect();
+		dragging = true;
+		dragDX = e.clientX - r.left;
+		dragDY = e.clientY - r.top;
+		// Switch from the CSS right/top anchor to absolute left/top before moving.
+		panel.style.left = r.left + 'px';
+		panel.style.top = r.top + 'px';
+		panel.style.right = 'auto';
+		panel.style.bottom = 'auto';
+		panel.classList.add('dragging');
+		try { panel.setPointerCapture(e.pointerId); } catch (_) {}
+		e.preventDefault();
+	}
+	function onPanelDrag(e) {
+		if (!dragging) return;
+		const r = panel.getBoundingClientRect();
+		let x = e.clientX - dragDX;
+		let y = e.clientY - dragDY;
+		// Keep the panel within the viewport.
+		x = Math.max(0, Math.min(x, window.innerWidth - r.width));
+		y = Math.max(0, Math.min(y, window.innerHeight - r.height));
+		panel.style.left = x + 'px';
+		panel.style.top = y + 'px';
+	}
+	function onPanelRelease(e) {
+		if (!dragging) return;
+		dragging = false;
+		panel.classList.remove('dragging');
+		try { panel.releasePointerCapture(e.pointerId); } catch (_) {}
 	}
 
 	function setLoading(label) {
