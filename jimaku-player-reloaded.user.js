@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Reloaded
 // @namespace    https://github.com/mgp25/jimaku-player-reloaded
-// @version      3.7.0
+// @version      3.7.1
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       mgp25
 // @match        *://*/*
@@ -36,6 +36,7 @@
 		outline: 'jimaku-outline',
 		bgOpacity: 'jimaku-bg-opacity',
 		fontFamily: 'jimaku-font-family',
+		fontWeight: 'jimaku-font-weight',
 		position: 'jimaku-position',
 		hideNative: 'jimaku-hide-native-subs',
 		autoSub: 'jimaku-auto-sub',
@@ -76,6 +77,7 @@
 		outline: get(KEYS.outline, 2),
 		bgOpacity: get(KEYS.bgOpacity, 0.35),
 		fontFamily: get(KEYS.fontFamily, ''),
+		fontWeight: get(KEYS.fontWeight, 400),
 		position: get(KEYS.position, 'bottom'),
 		hideNative: get(KEYS.hideNative, true),
 		autoSub: get(KEYS.autoSub, true),
@@ -566,6 +568,7 @@
 		display: none;
 		max-width: 92%; padding: 6px 14px;
 		font-size: calc(2.4vw * var(--jp-scale, 1));
+		font-weight: var(--jp-weight, 400);
 		line-height: 1.45; color: #fff; white-space: pre-wrap; text-align: center;
 		/* Outline width scales with the font so it stays proportional. */
 		-webkit-text-stroke: calc(var(--jp-outline, 2px) * var(--jp-scale, 1)) #000;
@@ -730,6 +733,17 @@
 		{ label: 'Monospace', value: 'ui-monospace, "Noto Sans Mono CJK JP", monospace' },
 	];
 
+	// Font-weight choices offered in Settings → Style.
+	const WEIGHT_PRESETS = [
+		{ label: 'Thin (100)', value: 100 },
+		{ label: 'Light (300)', value: 300 },
+		{ label: 'Normal (400)', value: 400 },
+		{ label: 'Medium (500)', value: 500 },
+		{ label: 'Semibold (600)', value: 600 },
+		{ label: 'Bold (700)', value: 700 },
+		{ label: 'Heavy (900)', value: 900 },
+	];
+
 	// True when the chosen font isn't one of the presets (i.e. user-typed).
 	function styleIsCustomFont() {
 		return !!state.fontFamily && !FONT_PRESETS.some((p) => p.value === state.fontFamily);
@@ -742,6 +756,7 @@
 		root.setProperty('--jp-scale', String(state.fontScale));
 		root.setProperty('--jp-outline', state.outline + 'px');
 		root.setProperty('--jp-bg-opacity', String(state.bgOpacity));
+		root.setProperty('--jp-weight', String(state.fontWeight));
 		if (state.fontFamily) root.setProperty('--jp-font', state.fontFamily);
 		else root.removeProperty('--jp-font');
 	}
@@ -1131,6 +1146,11 @@
 					value="${escapeAttr(styleIsCustomFont() ? state.fontFamily : '')}"
 					style="margin-top:6px;width:100%;box-sizing:border-box;${styleIsCustomFont() ? '' : 'display:none'}">
 
+				<label>Font weight</label>
+				<select id="jp-font-weight">
+					${WEIGHT_PRESETS.map((w) => `<option value="${w.value}" ${Number(state.fontWeight) === w.value ? 'selected' : ''}>${escapeHtml(w.label)}</option>`).join('')}
+				</select>
+
 				<label>Position</label>
 				<div class="row">
 					<button class="btn" data-pos="bottom" ${state.position === 'bottom' ? 'style="background:#e83450"' : ''}>Bottom</button>
@@ -1268,6 +1288,11 @@
 				state.fontFamily = fontCustom.value.trim();
 				applyStyleVars();
 				set(KEYS.fontFamily, state.fontFamily);
+			});
+			panel.querySelector('#jp-font-weight')?.addEventListener('change', (ev) => {
+				state.fontWeight = parseInt(ev.target.value, 10);
+				applyStyleVars();
+				set(KEYS.fontWeight, state.fontWeight);
 			});
 			panel.querySelectorAll('[data-pos]').forEach((b) => {
 				b.onclick = () => {
