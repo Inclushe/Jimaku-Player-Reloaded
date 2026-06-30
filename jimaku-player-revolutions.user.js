@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Revolutions
 // @namespace    https://github.com/Inclushe/jimaku-player-revolutions
-// @version      4.0.0
+// @version      4.1.0
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack, Video.js, Plyr, or JW Player video using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
@@ -19,13 +19,6 @@
 	'use strict';
 
 	const TAG = '[jimaku]';
-	const log = (...a) => console.log(TAG, ...a);
-	const info = (...a) => console.info(TAG, ...a);
-	const warn = (...a) => console.warn(TAG, ...a);
-
-	try { window.addEventListener('error', (e) => warn('uncaught', e.message)); } catch {}
-
-	info('boot', location.href, 'readyState=' + document.readyState);
 
 	// --- Cross-frame bridge (players inside iframes) -------------------------
 	// The script runs in EVERY frame. The top frame is the "controller" (show
@@ -33,8 +26,9 @@
 	// holds the player is the "renderer" (overlay, 字 button, <video> time/seek).
 	// When they're the same frame everything is a direct call; when the player
 	// lives in a cross-origin iframe they talk over postMessage.
-	//   controller -> renderer : 'ack' | 'state' | 'seek' | 'toast'
+	//   controller -> renderer : 'ack' | 'state' | 'seek' | 'toast' | 'debug'
 	//   renderer  -> controller : 'hello' | 'time' | 'videoFound' | 'key'
+	//                             | 'lastsub' | 'log' | 'logbatch'
 	// Downward messages are trusted only from window.top; upward messages must
 	// carry the session nonce handed out in 'ack', so a random page can't inject
 	// synthetic keypresses into the controller.
@@ -60,6 +54,38 @@
 	}
 	// True only in the top frame when the player it controls is in another frame.
 	function isSplitController() { return IS_TOP && !findPlayer() && paired; }
+
+	// --- Logging + on-page debug window -------------------------------------
+	// Some sites stop rendering when devtools is open, so when the top page URL
+	// carries ?debug_jimaku we mirror everything the script logs into an on-page
+	// window. log/info/warn still hit the real console and also push into a
+	// capped ring buffer; a renderer in an iframe forwards its lines up to the
+	// controller so the one window shows every frame.
+	const LOG_MAX = 600;
+	const logBuffer = [];
+	let forwardLogs = false; // renderer: stream new log lines up to the controller
+	let debugWin = null; // controller: the on-page log window element
+	const DEBUG_ENABLED = (() => {
+		try { return new URLSearchParams(location.search).has('debug_jimaku'); } catch { return false; }
+	})();
+	function fmtArg(a) {
+		if (typeof a === 'string') return a;
+		try { return JSON.stringify(a); } catch { return String(a); }
+	}
+	function record(level, args) {
+		const entry = { t: Date.now(), level, frame: IS_TOP ? 'top' : 'iframe', msg: args.map(fmtArg).join(' ') };
+		logBuffer.push(entry);
+		if (logBuffer.length > LOG_MAX) logBuffer.shift();
+		if (!IS_TOP && forwardLogs) sendUp('log', entry);
+		if (debugWin) appendLogRow(entry);
+	}
+	const log = (...a) => { console.log(TAG, ...a); record('log', a); };
+	const info = (...a) => { console.info(TAG, ...a); record('info', a); };
+	const warn = (...a) => { console.warn(TAG, ...a); record('warn', a); };
+
+	try { window.addEventListener('error', (e) => warn('uncaught', e.message)); } catch {}
+
+	info('boot', location.href, 'readyState=' + document.readyState, 'top=' + IS_TOP);
 
 	const KEYS = {
 		apiKey: 'jimaku-api-key',
@@ -1785,6 +1811,65 @@
 		return out;
 	}
 
+	// --- On-page debug window (controller side) -----------------------------
+	function fmtRow(e) {
+		const ts = new Date(e.t).toLocaleTimeString();
+		return `${ts} [${e.frame}] ${e.level === 'warn' ? '! ' : ''}${e.msg}`;
+	}
+	function appendLogRow(e) {
+		const body = debugWin && debugWin.querySelector('#jp-debug-body');
+		if (!body) return;
+		const atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
+		const line = document.createElement('div');
+		line.textContent = fmtRow(e);
+		line.style.color = e.level === 'warn' ? '#ffb454' : e.level === 'info' ? '#8fd3ff' : '#cdd3e0';
+		if (e.frame === 'iframe') line.style.opacity = '0.85';
+		body.appendChild(line);
+		while (body.childElementCount > LOG_MAX) body.removeChild(body.firstChild);
+		if (atBottom) body.scrollTop = body.scrollHeight;
+	}
+	// A renderer's log line arriving over the bridge — buffer + show, no re-console.
+	function ingestRemoteLog(entry) {
+		if (!entry) return;
+		logBuffer.push(entry);
+		if (logBuffer.length > LOG_MAX) logBuffer.shift();
+		if (debugWin) appendLogRow(entry);
+	}
+	function createDebugWindow() {
+		if (debugWin || !document.body) return;
+		const w = document.createElement('div');
+		w.id = 'jp-debug';
+		w.style.cssText =
+			'position:fixed;right:8px;bottom:8px;width:min(560px,92vw);height:min(340px,55vh);z-index:2147483647;' +
+			'background:rgba(10,12,18,.95);color:#cdd3e0;border:1px solid #2a2f3e;border-radius:8px;display:flex;' +
+			'flex-direction:column;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;box-shadow:0 8px 30px rgba(0,0,0,.5);' +
+			'resize:both;overflow:hidden;';
+		const bar = document.createElement('div');
+		bar.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;background:#161a26;flex:0 0 auto;';
+		bar.innerHTML = '<strong style="flex:1;color:#fff">字 debug log</strong>';
+		const mk = (label) => {
+			const b = document.createElement('button');
+			b.textContent = label;
+			b.style.cssText = 'background:#2a2f3e;color:#fff;border:0;border-radius:4px;padding:2px 8px;cursor:pointer;font:inherit;';
+			return b;
+		};
+		const copyBtn = mk('copy');
+		const clearBtn = mk('clear');
+		const closeBtn = mk('×');
+		bar.append(copyBtn, clearBtn, closeBtn);
+		const body = document.createElement('div');
+		body.id = 'jp-debug-body';
+		body.style.cssText = 'flex:1;overflow:auto;padding:6px 8px;white-space:pre-wrap;word-break:break-word;';
+		w.append(bar, body);
+		document.body.appendChild(w);
+		debugWin = w;
+		copyBtn.onclick = () => { try { navigator.clipboard.writeText(logBuffer.map(fmtRow).join('\n')); } catch {} };
+		clearBtn.onclick = () => { logBuffer.length = 0; body.textContent = ''; };
+		closeBtn.onclick = () => { w.remove(); debugWin = null; };
+		for (const entry of logBuffer) appendLogRow(entry);
+		info('debug window opened');
+	}
+
 	// In split mode toasts belong over the player, so hand them to the renderer.
 	function toast(msg) {
 		if (isSplitController()) { sendDown('toast', msg); return; }
@@ -1909,6 +1994,7 @@
 		// Controller duties run in the top frame: detect the show from the page,
 		// and keep the panel available once there's a player (here or paired).
 		if (IS_TOP) {
+			if (DEBUG_ENABLED && !debugWin) createDebugWindow();
 			refreshDetection();
 			if (hasPlayer || paired) ensurePanel();
 		}
@@ -1970,6 +2056,7 @@
 				lastPeerReport = Date.now();
 				info('paired with renderer iframe', d.data?.adapter || '', e.origin);
 				sendDown('ack', { nonce: sessionNonce });
+				if (DEBUG_ENABLED) sendDown('debug', { on: true });
 				ensurePanel();
 				pushState(); // full initial sync
 				maybeAutoLoad();
@@ -1982,6 +2069,8 @@
 			else if (d.type === 'videoFound') state.videoFound = !!d.data;
 			else if (d.type === 'key') handleHotkey(d.data?.k, d.data?.shift);
 			else if (d.type === 'lastsub') state.history = d.data == null ? [] : [{ start: d.data | 0, text: '' }];
+			else if (d.type === 'log') ingestRemoteLog(d.data);
+			else if (d.type === 'logbatch') (Array.isArray(d.data) ? d.data : []).forEach(ingestRemoteLog);
 		} else {
 			// Renderer side. Only trust the top frame for downward messages.
 			if (e.source !== window.top) return;
@@ -1998,6 +2087,9 @@
 				seekTo(d.data | 0);
 			} else if (d.type === 'toast') {
 				showToast(String(d.data ?? ''));
+			} else if (d.type === 'debug') {
+				forwardLogs = !!d.data?.on;
+				if (forwardLogs) sendUp('logbatch', logBuffer.slice(-LOG_MAX));
 			}
 		}
 	});

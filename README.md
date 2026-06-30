@@ -111,6 +111,10 @@ It runs on every page (`@match *://*/*`) but does nothing until a supported play
 
 State is stored in `localStorage` (`jp:*` keys) so it works in userscript managers that don't expose `GM_setValue` (notably Userscripts.app on Safari). Per-show data (alignment, chosen entry) is keyed on `hostname + show title`.
 
+### Debugging
+
+Some sites stop rendering when devtools is open. Add `?debug_jimaku` to the **top page** URL to get an on-page log window instead (bottom-right, draggable-resize, with copy/clear). `log`/`info`/`warn` still write to the console *and* into a capped ring buffer; when the player is in an iframe, that frame forwards its lines up so the single window shows every frame (tagged `[top]` / `[iframe]`).
+
 ### Frames
 
 The script injects into every frame. The **top frame is the controller** (show detection from the page, the `#jp-panel`, jimaku network, persistence) and **whichever frame holds the player is the renderer** (overlay, **字** button, `<video>` time source). When they're the same frame everything is a direct call — identical to single-frame operation. When the player is in a cross-origin iframe they pair over `postMessage` (`PROTO = 'jimaku-rev/4'`): the renderer announces itself to `window.top`, the controller replies with a session nonce, then state flows down (cues, alignment, style, seek, toast) and the clock + hotkeys/`字`-clicks flow up. Downward messages are trusted only from `window.top`; upward messages must carry the nonce, so a stray page can't inject synthetic keypresses.
