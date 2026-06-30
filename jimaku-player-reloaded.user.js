@@ -1376,7 +1376,6 @@
 			const text = await jimakuDownload(f.url);
 			applySubs(parseByName(text, f.name), f.name);
 			toast(`Loaded ${f.name}`);
-			togglePanel(false);
 		} catch (e) {
 			setError(e.message);
 		}
