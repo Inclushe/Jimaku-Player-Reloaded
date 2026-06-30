@@ -94,6 +94,7 @@ Looking words up mid-episode is only half the loop — the other half is actuall
 - **ASS positioning / styling is partially supported;** complex karaoke effects render plainly. Lines that overlap in time (including `.ass` lines sharing a start timestamp) are stacked and shown together.
 - **Auto-detection is best-effort.** The show name is guessed from the page title (`og:title` / `<h1>` / `<title>` / the player's `title` attribute), so on many sites you'll need to type the show + episode into the search box yourself.
 - **Provider must expose a `<video>` element.** HTML / HLS / DASH providers work; YouTube / Vimeo iframe providers don't expose a readable `<video>`, so time-sync won't work there.
+- **Players inside iframes are supported** (detection + panel run in the top page; the overlay/controls run in the player iframe), **except fully sandboxed iframes** (`<iframe sandbox>` without `allow-scripts`) where no script can run. While the iframe player is in its own fullscreen, the panel — which lives in the top page — isn't visible; the subtitles and **字** button stay on the video.
 - **jimaku.cc rate limit:** 25 requests / minute per key. Plenty for normal use; if you hammer the search box you'll get throttled briefly.
 
 ## Development
@@ -109,6 +110,10 @@ It runs on every page (`@match *://*/*`) but does nothing until a supported play
 - Talks to the jimaku.cc API via `GM_xmlhttpRequest`.
 
 State is stored in `localStorage` (`jp:*` keys) so it works in userscript managers that don't expose `GM_setValue` (notably Userscripts.app on Safari). Per-show data (alignment, chosen entry) is keyed on `hostname + show title`.
+
+### Frames
+
+The script injects into every frame. The **top frame is the controller** (show detection from the page, the `#jp-panel`, jimaku network, persistence) and **whichever frame holds the player is the renderer** (overlay, **字** button, `<video>` time source). When they're the same frame everything is a direct call — identical to single-frame operation. When the player is in a cross-origin iframe they pair over `postMessage` (`PROTO = 'jimaku-rev/4'`): the renderer announces itself to `window.top`, the controller replies with a session nonce, then state flows down (cues, alignment, style, seek, toast) and the clock + hotkeys/`字`-clicks flow up. Downward messages are trusted only from `window.top`; upward messages must carry the nonce, so a stray page can't inject synthetic keypresses.
 
 The native [anitomy](https://github.com/yjl9903/anitomy) filename parser is vendored verbatim at the bottom of the file (`makeAnitomy()`), wrapped in a CommonJS shim and instantiated lazily on first use. It powers auto-load's per-episode file matching — no WASM, no network, fully synchronous. To update it, replace that block with a fresh build of `anitomy`'s `dist/index.cjs`.
 

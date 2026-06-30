@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Revolutions
 // @namespace    https://github.com/Inclushe/jimaku-player-revolutions
-// @version      3.9.0
+// @version      4.0.0
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack, Video.js, Plyr, or JW Player video using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
@@ -26,6 +26,40 @@
 	try { window.addEventListener('error', (e) => warn('uncaught', e.message)); } catch {}
 
 	info('boot', location.href, 'readyState=' + document.readyState);
+
+	// --- Cross-frame bridge (players inside iframes) -------------------------
+	// The script runs in EVERY frame. The top frame is the "controller" (show
+	// detection, the #jp-panel, jimaku network, persistence); whichever frame
+	// holds the player is the "renderer" (overlay, 字 button, <video> time/seek).
+	// When they're the same frame everything is a direct call; when the player
+	// lives in a cross-origin iframe they talk over postMessage.
+	//   controller -> renderer : 'ack' | 'state' | 'seek' | 'toast'
+	//   renderer  -> controller : 'hello' | 'time' | 'videoFound' | 'key'
+	// Downward messages are trusted only from window.top; upward messages must
+	// carry the session nonce handed out in 'ack', so a random page can't inject
+	// synthetic keypresses into the controller.
+	const IS_TOP = (() => { try { return window.top === window.self; } catch { return false; } })();
+	const PROTO = 'jimaku-rev/4';
+	// Fields mirrored from the controller's state into the renderer so it can
+	// draw the overlay without re-deriving anything.
+	const SYNC_FIELDS = [
+		'subtitles', 'subtitlesFile', 'alignment', 'isEnabled', 'position',
+		'fontScale', 'outline', 'bgOpacity', 'fontFamily', 'fontWeight',
+		'hideNative', 'customCss', 'consumeKeys',
+	];
+	let paired = false;
+	let peerWindow = null; // controller: the renderer's window
+	let peerOrigin = '*';
+	let sessionNonce = '';
+	function sendDown(type, data) {
+		if (!peerWindow) return;
+		try { peerWindow.postMessage({ jimaku: PROTO, type, data }, peerOrigin); } catch {}
+	}
+	function sendUp(type, data) {
+		try { window.top.postMessage({ jimaku: PROTO, nonce: sessionNonce, type, data }, '*'); } catch {}
+	}
+	// True only in the top frame when the player it controls is in another frame.
+	function isSplitController() { return IS_TOP && !findPlayer() && paired; }
 
 	const KEYS = {
 		apiKey: 'jimaku-api-key',
@@ -169,10 +203,13 @@
 	}
 	const seekTo = (timeMs) => {
 		const t = Math.max(0, timeMs);
+		// In split mode the controller has no <video>; ask the renderer to seek.
+		if (isSplitController()) { sendDown('seek', t); return; }
 		const v = getLocalVideo();
 		if (v) v.currentTime = t / 1000;
 	};
 
+	let _timeReport = 0;
 	setInterval(() => {
 		const v = getLocalVideo();
 		if (!v || typeof v.currentTime !== 'number') return;
@@ -181,7 +218,11 @@
 			state.videoFound = true;
 			info('local video connected', v.tagName, 't=' + v.currentTime);
 			updateVideoStatus();
+			if (!IS_TOP) sendUp('videoFound', true);
 		}
+		// Renderer in an iframe: feed the controller our clock (~10/s) so its
+		// panel's "now playing" readout and S/B sync math have a current time.
+		if (!IS_TOP && paired && ++_timeReport % 2 === 0) sendUp('time', state.videoTimeMs);
 	}, 50);
 
 	function applyHideNative() {
@@ -283,6 +324,7 @@
 			state.history = [];
 			state.currentSubIndex = -1;
 			updateVideoStatus();
+			pushState(['subtitles', 'subtitlesFile']);
 		}
 		if (changed) {
 			if (next.showKey && typeof state.alignByShow[next.showKey] === 'number') {
@@ -560,7 +602,7 @@
 	// never clobbers a file the user picked. Triggered on mount / detection change.
 	async function maybeAutoLoad() {
 		if (!state.autoSub || !state.apiKey) return;
-		if (!findPlayer()) return;
+		if (!findPlayer() && !paired) return; // a local or a remote (iframe) player
 		const det = state.detected;
 		if (!det || !det.showTitle || det.episodeNumber == null) return; // need an episode to match
 		const key = autoKey(det);
@@ -783,10 +825,12 @@
 
 	function ensureStyles() {
 		if (document.getElementById('jp-styles')) return;
+		const head = document.head || document.documentElement;
+		if (!head) return;
 		const s = document.createElement('style');
 		s.id = 'jp-styles';
 		s.textContent = STYLES;
-		document.head.appendChild(s);
+		head.appendChild(s);
 	}
 
 	// Preset font-family stacks offered in Settings → Style. Empty value = use the
@@ -827,6 +871,30 @@
 		else root.removeProperty('--jp-font');
 	}
 
+	// Re-apply everything the overlay's appearance depends on. Called on the
+	// renderer side whenever synced state arrives, and locally in solo mode.
+	function applyRenderVisuals() {
+		if (overlay) overlay.className = state.position;
+		applyStyleVars();
+		applyCustomCss();
+		applyHideNative();
+		updateVideoStatus();
+	}
+
+	// Push render-affecting state to the renderer. In split mode this serializes
+	// the named fields (or all of them) over the bridge; in solo mode the
+	// renderer is this very frame, so we just re-apply the visuals. Cheap and
+	// idempotent either way, so callers can fire it after any mutation.
+	function pushState(fields) {
+		if (isSplitController()) {
+			const data = {};
+			for (const f of fields || SYNC_FIELDS) data[f] = state[f];
+			sendDown('state', data);
+		} else {
+			applyRenderVisuals();
+		}
+	}
+
 	// Restore every user-facing option to its default and persist it.
 	function resetSettings() {
 		for (const [k, v] of Object.entries(DEFAULTS)) {
@@ -839,6 +907,7 @@
 		applyHideNative();
 		if (overlay) overlay.className = state.position;
 		renderPanel();
+		pushState();
 		toast('Settings reset to defaults');
 	}
 
@@ -856,7 +925,9 @@
 		if (el.textContent !== state.customCss) el.textContent = state.customCss || '';
 	}
 
-	function ensureMounted() {
+	// Renderer side: mount the overlay + 字 button inside the local player. Runs
+	// wherever a player exists (the top frame in solo mode, or a player iframe).
+	function mountOverlay() {
 		ensureStyles();
 		applyCustomCss();
 		const container = findPlayerContainer();
@@ -885,29 +956,13 @@
 			fab.title = 'Jimaku Player (J)';
 			fab.addEventListener('click', (e) => {
 				e.stopPropagation();
-				togglePanel();
+				// The panel lives in the controller (top) frame; if that's elsewhere,
+				// ask it to open. Otherwise toggle locally.
+				if (IS_TOP) togglePanel();
+				else sendUp('key', { k: 'j' });
 			});
 			fab.addEventListener('mousedown', (e) => e.stopPropagation());
 			host.appendChild(fab);
-
-			// The panel lives on <body>, not inside the player, so the player's
-			// bounds/overflow can't clip it on small (mobile) screens.
-			document.getElementById('jp-panel')?.remove();
-			panel = document.createElement('div');
-			panel.id = 'jp-panel';
-			// Don't let any click/mouse interaction inside the panel reach the
-			// player below (Vidstack toggles play/pause on click).
-			['click', 'mousedown', 'mouseup', 'dblclick'].forEach((evt) => {
-				panel.addEventListener(evt, (e) => e.stopPropagation());
-			});
-			// Drag the panel by its title bar. Pointer capture (set on the panel,
-			// which persists across re-renders) keeps tracking even when the cursor
-			// leaves the bar, and works for both mouse and touch.
-			panel.addEventListener('pointerdown', onPanelGrab);
-			panel.addEventListener('pointermove', onPanelDrag);
-			panel.addEventListener('pointerup', onPanelRelease);
-			panel.addEventListener('pointercancel', onPanelRelease);
-			document.body.appendChild(panel);
 
 			const subTextEl = overlay.querySelector('#jp-overlay-text');
 			subTextEl.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -917,12 +972,11 @@
 				if (t) window.open('https://jisho.org/search/' + encodeURIComponent(t), '_blank');
 			});
 
-			applyStyleVars();
-			renderPanel();
+			applyRenderVisuals();
 			// Attach the hotkey listener only now that a player is mounted, so it
-			// never fires on pages without a Vidstack player.
+			// never fires on pages without a player.
 			wireHotkeys();
-			info('mounted on player container', container.tagName.toLowerCase());
+			info('mounted overlay on', container.tagName.toLowerCase());
 
 			// On the first successful mount, flash the 字 button for 5s so the user
 			// knows it's there, then let it fall back to hover/controls visibility.
@@ -933,6 +987,36 @@
 			}
 		}
 		return true;
+	}
+
+	// Controller side: create the #jp-panel on <body> (top frame only). Kept off
+	// the player element so the player's bounds/overflow can't clip it on mobile,
+	// and so it lives in the top frame when the player is in an iframe.
+	function ensurePanel() {
+		if (!document.body) return;
+		ensureStyles();
+		applyCustomCss();
+		if (panel && document.body.contains(panel)) return;
+		document.getElementById('jp-panel')?.remove();
+		panel = document.createElement('div');
+		panel.id = 'jp-panel';
+		// Don't let any click/mouse interaction inside the panel reach the player
+		// below (some players toggle play/pause on click).
+		['click', 'mousedown', 'mouseup', 'dblclick'].forEach((evt) => {
+			panel.addEventListener(evt, (e) => e.stopPropagation());
+		});
+		// Drag the panel by its title bar. Pointer capture (set on the panel, which
+		// persists across re-renders) keeps tracking even when the cursor leaves
+		// the bar, and works for both mouse and touch.
+		panel.addEventListener('pointerdown', onPanelGrab);
+		panel.addEventListener('pointermove', onPanelDrag);
+		panel.addEventListener('pointerup', onPanelRelease);
+		panel.addEventListener('pointercancel', onPanelRelease);
+		document.body.appendChild(panel);
+		// In split mode the top frame has no player to hotkey-guard, but we still
+		// want keys to work when the page (not the iframe) has focus.
+		wireHotkeys();
+		renderPanel();
 	}
 
 	function togglePanel(force) {
@@ -1295,6 +1379,7 @@
 				state.alignment = 0;
 				persistAlignment();
 				renderPanel();
+				pushState(['alignment']);
 				toast(alignmentText());
 			});
 			panel.querySelector('#jp-rewind')?.addEventListener('click', rewindToLastSub);
@@ -1335,6 +1420,7 @@
 			panel.querySelector('#jp-consume-keys')?.addEventListener('change', (ev) => {
 				state.consumeKeys = ev.target.checked;
 				set(KEYS.consumeKeys, state.consumeKeys);
+				pushState(['consumeKeys']);
 			});
 			panel.querySelector('#jp-reset-settings')?.addEventListener('click', resetSettings);
 			const cssBox = panel.querySelector('#jp-custom-css');
@@ -1344,12 +1430,14 @@
 				state.ui.cssDraft = undefined;
 				set(KEYS.customCss, state.customCss);
 				applyCustomCss();
+				pushState(['customCss']);
 				toast('Custom CSS applied');
 			});
 			panel.querySelector('#jp-scale')?.addEventListener('input', (ev) => {
 				state.fontScale = parseFloat(ev.target.value);
 				applyStyleVars();
 				set(KEYS.fontScale, state.fontScale);
+				pushState(['fontScale']);
 				const lbl = panel.querySelector('#jp-scale-label');
 				if (lbl) lbl.textContent = `Font size (${Math.round(state.fontScale * 100)}%)`;
 			});
@@ -1357,6 +1445,7 @@
 				state.outline = parseFloat(ev.target.value);
 				applyStyleVars();
 				set(KEYS.outline, state.outline);
+				pushState(['outline']);
 				const lbl = panel.querySelector('#jp-outline-label');
 				if (lbl) lbl.textContent = `Outline size (${state.outline.toFixed(1)} · scales with font)`;
 			});
@@ -1364,6 +1453,7 @@
 				state.bgOpacity = parseFloat(ev.target.value);
 				applyStyleVars();
 				set(KEYS.bgOpacity, state.bgOpacity);
+				pushState(['bgOpacity']);
 				const lbl = panel.querySelector('#jp-bg-opacity-label');
 				if (lbl) lbl.textContent = `Background opacity (${Math.round(state.bgOpacity * 100)}%)`;
 			});
@@ -1381,16 +1471,19 @@
 				}
 				applyStyleVars();
 				set(KEYS.fontFamily, state.fontFamily);
+				pushState(['fontFamily']);
 			});
 			fontCustom?.addEventListener('input', () => {
 				state.fontFamily = fontCustom.value.trim();
 				applyStyleVars();
 				set(KEYS.fontFamily, state.fontFamily);
+				pushState(['fontFamily']);
 			});
 			panel.querySelector('#jp-font-weight')?.addEventListener('change', (ev) => {
 				state.fontWeight = parseInt(ev.target.value, 10);
 				applyStyleVars();
 				set(KEYS.fontWeight, state.fontWeight);
+				pushState(['fontWeight']);
 			});
 			panel.querySelectorAll('[data-pos]').forEach((b) => {
 				b.onclick = () => {
@@ -1398,6 +1491,7 @@
 					set(KEYS.position, state.position);
 					if (overlay) overlay.className = state.position;
 					renderPanel();
+					pushState(['position']);
 				};
 			});
 		}
@@ -1512,6 +1606,7 @@
 		}
 		updateVideoStatus();
 		renderPanel();
+		pushState(['subtitles', 'subtitlesFile']);
 	}
 
 	function alignmentText() {
@@ -1523,6 +1618,7 @@
 		state.alignment += deltaMs;
 		persistAlignment();
 		renderPanel();
+		pushState(['alignment']);
 		toast(alignmentText());
 	}
 	function persistAlignment() {
@@ -1552,6 +1648,7 @@
 		}
 		state.alignment = state.subtitles[0].start - state.videoTimeMs;
 		persistAlignment();
+		pushState(['alignment']);
 		const preview = state.subtitles[0].text.split('\n')[0].slice(0, 40);
 		toast(`✓ First sub anchored: "${preview}"`);
 		pulseFab();
@@ -1571,6 +1668,7 @@
 		const target = state.subtitles[idx];
 		state.alignment = target.start - state.videoTimeMs;
 		persistAlignment();
+		pushState(['alignment']);
 		const preview = target.text.split('\n')[0].slice(0, 40);
 		toast(`✓ Anchored: "${preview}"`);
 		pulseFab();
@@ -1634,6 +1732,9 @@
 				state.currentSubIndex = idx;
 				const fresh = active.map((i) => state.subtitles[i]);
 				state.history = [...fresh.reverse(), ...state.history].slice(0, 10);
+				// Renderer in an iframe: report the latest cue's start so the
+				// controller's B (rewind to last sub) works without its own tick.
+				if (!IS_TOP && paired) sendUp('lastsub', state.history[0]?.start ?? null);
 			}
 		} else {
 			if (el) {
@@ -1684,8 +1785,13 @@
 		return out;
 	}
 
-	let toastEl;
+	// In split mode toasts belong over the player, so hand them to the renderer.
 	function toast(msg) {
+		if (isSplitController()) { sendDown('toast', msg); return; }
+		showToast(msg);
+	}
+	let toastEl;
+	function showToast(msg) {
 		if (!toastEl) {
 			toastEl = document.createElement('div');
 			toastEl.style.cssText =
@@ -1716,10 +1822,10 @@
 		toast._t = setTimeout(() => (toastEl.style.opacity = '0'), 1800);
 	}
 
-	// Registered in the capture phase so we can stop Jimaku's own hotkeys from
-	// reaching the player's keyboard handler (Vidstack binds many single letters).
-	// Only attached once we've mounted onto a player (see ensureMounted), so it
-	// never fires on pages without a Vidstack player.
+	// Registered in the capture phase so we can stop our own hotkeys from reaching
+	// the player's keyboard handler (players bind many single letters). Attached
+	// once a player is mounted, or in the top frame once it's controlling a remote
+	// renderer, so it never fires on pages with no player.
 	let hotkeysWired = false;
 	function wireHotkeys() {
 		if (hotkeysWired) return;
@@ -1729,18 +1835,28 @@
 	function onHotkey(e) {
 		if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 		if (e.metaKey || e.ctrlKey || e.altKey) return;
-		// Bail if there's no player on the page right now (e.g. SPA navigated away).
-		if (!findPlayer()) return;
+		const local = findPlayer();
+		// Act only when there's a player to drive: one in this frame, or (in the
+		// top frame) a paired renderer in an iframe.
+		if (!local && !(IS_TOP && paired)) return;
 		const k = e.key.toLowerCase();
 		if (!'jshibzx'.includes(k)) return;
-		info('key', k, 'player=' + document.querySelectorAll(ANY_PLAYER_SEL).length, 'mounted=' + !!host);
-		// Swallow the key before it bubbles to the player, unless disabled.
-		if (state.consumeKeys) {
+		// Swallow the key before it reaches the player — only meaningful in the
+		// frame that actually holds the player.
+		if (state.consumeKeys && local) {
 			e.preventDefault();
 			e.stopImmediatePropagation();
 		}
+		info('key', k, 'top=' + IS_TOP, 'local=' + !!local, 'paired=' + paired);
+		// The controller owns all stateful actions. A renderer in an iframe just
+		// forwards the intent up; the top frame runs it directly.
+		if (IS_TOP) handleHotkey(k, e.shiftKey);
+		else sendUp('key', { k, shift: e.shiftKey });
+	}
+	// Controller-side hotkey actions (runs in the top frame only).
+	function handleHotkey(k, shiftKey) {
 		if (k === 'j') {
-			ensureMounted();
+			ensurePanel();
 			togglePanel();
 		} else if (k === 's') {
 			anchorCurrentSub();
@@ -1748,39 +1864,55 @@
 			state.isEnabled = !state.isEnabled;
 			state.hideNative = !state.hideNative;
 			applyHideNative();
+			pushState(['isEnabled', 'hideNative']);
 			toast(state.isEnabled ? 'Subs on' : 'Subs off');
 		} else if (k === 'i') {
 			state.position = state.position === 'bottom' ? 'top' : 'bottom';
 			set(KEYS.position, state.position);
 			if (overlay) overlay.className = state.position;
+			pushState(['position']);
 		} else if (k === 'b') {
 			rewindToLastSub();
 		} else if (k === 'z') {
-			adjustAlignment(e.shiftKey ? -1000 : -100);
+			adjustAlignment(shiftKey ? -1000 : -100);
 		} else if (k === 'x') {
-			adjustAlignment(e.shiftKey ? 1000 : 100);
+			adjustAlignment(shiftKey ? 1000 : 100);
 		} else if (k === 'Backspace') {
 			adjustAlignment(0);
 		}
 	}
 
-	// Single watcher driving everything. Vidstack often mounts late, and SPA
-	// sites swap the player / change the URL between episodes without a reload —
-	// none of which fire a reliable single DOM event. So we re-check on DOM
-	// mutations, on history events, and on a 1s heartbeat. Each concern is
-	// idempotent and guarded, so re-running is cheap:
-	//   - ensureMounted(): mounts when the player appears, remounts if swapped.
-	//   - refreshDetection(): re-reads title/episode (also catches async-populated
-	//     titles and SPA navigation) and fires maybeAutoLoad() when ready.
+	// Single watcher driving everything. Players often mount late, and SPA sites
+	// swap the player / change the URL between episodes without a reload — none of
+	// which fire a reliable single DOM event. So we re-check on DOM mutations, on
+	// history events, and on a 1s heartbeat. Each concern is idempotent and
+	// guarded, so re-running is cheap:
+	//   - mountOverlay(): mounts the overlay when a local player appears.
+	//   - announceRenderer(): if we're a player iframe, pairs with the top frame.
+	//   - ensurePanel()/refreshDetection(): top-frame UI + show detection, which
+	//     re-reads title/episode (also catching async titles and SPA navigation)
+	//     and fires maybeAutoLoad() when ready.
 	let _lastDiag = 0;
 	let lastHref = '';
 	let lastPlayerSeen = false;
 	function watch() {
-		ensureMounted();
-		refreshDetection();
-
 		const found = findPlayer();
 		const hasPlayer = !!found;
+
+		// Renderer duties run wherever a player lives (solo top frame or a player
+		// iframe): mount the overlay, and — if we're in an iframe — announce
+		// ourselves to the top frame so it can drive us.
+		if (hasPlayer) {
+			mountOverlay();
+			if (!IS_TOP) announceRenderer();
+		}
+		// Controller duties run in the top frame: detect the show from the page,
+		// and keep the panel available once there's a player (here or paired).
+		if (IS_TOP) {
+			refreshDetection();
+			if (hasPlayer || paired) ensurePanel();
+		}
+
 		if (hasPlayer !== lastPlayerSeen) {
 			lastPlayerSeen = hasPlayer;
 			info(hasPlayer ? `${found.adapter.name} player detected` : 'player gone');
@@ -1799,10 +1931,76 @@
 			const vid = document.querySelectorAll('video').length;
 			// Only chatter while something player-ish is around, or until we mount.
 			if (mp || vid || host) {
-				info('scan', 'players=' + mp + ' (' + (found?.adapter.name || 'none') + ')', 'video=' + vid, 'mounted=' + !!host);
+				info('scan', 'players=' + mp + ' (' + (found?.adapter.name || 'none') + ')', 'video=' + vid, 'top=' + IS_TOP, 'mounted=' + !!host);
 			}
 		}
 	}
+
+	// --- Bridge wiring ------------------------------------------------------
+	// Renderer in an iframe: keep announcing to the top frame until it acks, so
+	// pairing survives the controller loading after us (or an SPA remount).
+	let _helloTimer = null;
+	function announceRenderer() {
+		if (paired || IS_TOP || _helloTimer) return;
+		sendUp('hello', { adapter: findPlayer()?.adapter.name || '' });
+		_helloTimer = setInterval(() => {
+			if (paired) { clearInterval(_helloTimer); _helloTimer = null; return; }
+			sendUp('hello', { adapter: findPlayer()?.adapter.name || '' });
+		}, 1000);
+	}
+
+	let lastPeerReport = 0;
+	window.addEventListener('message', (e) => {
+		const d = e.data;
+		if (!d || d.jimaku !== PROTO) return;
+		if (IS_TOP) {
+			// Controller side. Ignore remote renderers if we have our own player.
+			if (findPlayer()) return;
+			if (d.type === 'hello') {
+				// Keep our current renderer unless it's the same frame re-announcing
+				// (SPA remount) or the current one has gone silent (its tab/iframe
+				// was replaced).
+				const samePeer = peerWindow === e.source;
+				const peerStale = Date.now() - lastPeerReport > 4000;
+				if (paired && !samePeer && !peerStale) return;
+				peerWindow = e.source;
+				peerOrigin = e.origin || '*';
+				if (!sessionNonce) sessionNonce = Math.random().toString(36).slice(2);
+				paired = true;
+				lastPeerReport = Date.now();
+				info('paired with renderer iframe', d.data?.adapter || '', e.origin);
+				sendDown('ack', { nonce: sessionNonce });
+				ensurePanel();
+				pushState(); // full initial sync
+				maybeAutoLoad();
+				return;
+			}
+			// All other inbound messages must carry the nonce we handed out.
+			if (!sessionNonce || d.nonce !== sessionNonce) return;
+			lastPeerReport = Date.now();
+			if (d.type === 'time') state.videoTimeMs = d.data | 0;
+			else if (d.type === 'videoFound') state.videoFound = !!d.data;
+			else if (d.type === 'key') handleHotkey(d.data?.k, d.data?.shift);
+			else if (d.type === 'lastsub') state.history = d.data == null ? [] : [{ start: d.data | 0, text: '' }];
+		} else {
+			// Renderer side. Only trust the top frame for downward messages.
+			if (e.source !== window.top) return;
+			if (d.type === 'ack') {
+				paired = true;
+				sessionNonce = d.data?.nonce || '';
+				info('paired with controller (top frame)');
+			} else if (d.type === 'state') {
+				const newSubs = 'subtitles' in d.data;
+				Object.assign(state, d.data);
+				if (newSubs) { state.currentSubIndex = -1; state.history = []; }
+				applyRenderVisuals();
+			} else if (d.type === 'seek') {
+				seekTo(d.data | 0);
+			} else if (d.type === 'toast') {
+				showToast(String(d.data ?? ''));
+			}
+		}
+	});
 	// Coalesce mutation bursts (SPA pages churn the DOM heavily) to one run/frame.
 	let _watchScheduled = false;
 	function scheduleWatch() {
