@@ -1700,6 +1700,8 @@
 			adjustAlignment(e.shiftKey ? -1000 : -100);
 		} else if (k === 'x') {
 			adjustAlignment(e.shiftKey ? 1000 : 100);
+		} else if (k === 'Backspace') {
+			adjustAlignment(0);
 		}
 	}, true);
 
