@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Reloaded
 // @namespace    https://github.com/Inclushe/Jimaku-Player-Reloaded
-// @version      3.8.2
+// @version      3.8.3
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
@@ -718,9 +718,9 @@
 	html.jp-hide-native .vds-captions,
 	html.jp-hide-native [data-part="cue-display"],
 	html.jp-hide-native [data-part="captions"] {
-		display: none !important;
-		opacity: 0 !important;
-		visibility: hidden !important;
+		display: none;
+		opacity: 0;
+		visibility: hidden;
 	}
 	html.jp-hide-native video::cue { opacity: 0 !important; }
 	`;
@@ -1687,6 +1687,8 @@
 			anchorCurrentSub();
 		} else if (k === 'h') {
 			state.isEnabled = !state.isEnabled;
+			state.hideNative = !state.hideNative;
+			applyHideNative();
 			toast(state.isEnabled ? 'Subs on' : 'Subs off');
 		} else if (k === 'i') {
 			state.position = state.position === 'bottom' ? 'top' : 'bottom';
