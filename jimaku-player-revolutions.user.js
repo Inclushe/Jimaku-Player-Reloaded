@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Revolutions
 // @namespace    https://github.com/Inclushe/jimaku-player-revolutions
-// @version      4.3.0
+// @version      4.3.1
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack, Video.js, Plyr, or JW Player video using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
@@ -200,8 +200,10 @@
 	};
 
 	// Player adapters. Each describes one kind of web video player: how to find
-	// its mount root, where its native captions render, and the selector (matched
-	// against the root) that is true while the player's own controls are visible.
+	// its mount root and where its native captions render. (`controls` records the
+	// selector that marks the player's controls visible — kept for reference, but
+	// the 字 button now auto-hides on its own mouse-idle timer instead, since that
+	// class is unreliable in many iframe embeds.)
 	// Adapters are tried in this order and the first player found on the page wins.
 	const PLAYER_ADAPTERS = [
 		{
@@ -709,14 +711,6 @@
 		.flatMap((a) => a.captions)
 		.map((sel) => `html.jp-hide-native ${sel}`)
 		.join(',\n\t');
-	// Only adapters that expose a "controls visible" selector get a CSS rule;
-	// adapters with an empty `controls` fall back to JS hover/idle (see
-	// wireFabAutoHide). Guard against an empty selector list producing `{ ... }`.
-	const FAB_CONTROLS_CSS = PLAYER_ADAPTERS
-		.filter((a) => a.controls)
-		.flatMap((a) => a.roots.map((r) => `${r}${a.controls} #jp-fab`))
-		.join(',\n\t');
-	const FAB_CONTROLS_RULE = FAB_CONTROLS_CSS ? `${FAB_CONTROLS_CSS} { opacity: 1; }` : '';
 
 	// Overlay / button / caption-hiding CSS — injected into the page <head>.
 	const OVERLAY_STYLES = `
@@ -749,12 +743,14 @@
 		font-weight: 700; font-size: 14px; cursor: pointer;
 		border: 1px solid rgba(255,255,255,.15);
 		opacity: 0; transition: opacity .2s, background .2s;
-		user-select: none; pointer-events: auto;
+		user-select: none; pointer-events: none;
 		font-family: "Yu Gothic", "Noto Sans JP", sans-serif;
 	}
-	#jp-host:hover #jp-fab, #jp-fab:hover, #jp-fab:focus-visible, #jp-fab.has-active, #jp-fab.reveal, #jp-fab.hover-show { opacity: 1; }
-	/* Show the 字 button whenever the player's own controls are visible */
-	${FAB_CONTROLS_RULE}
+	/* Visible (and clickable) on mouse activity over the player, focus, panel
+	   open, or the initial reveal. The renderer drives .hover-show on idle. */
+	#jp-fab:hover, #jp-fab:focus-visible, #jp-fab.has-active, #jp-fab.reveal, #jp-fab.hover-show {
+		opacity: 1; pointer-events: auto;
+	}
 	#jp-fab:hover { background: #e83450; }
 	#jp-fab.has-subs::after {
 		content: ''; position: absolute; right: 4px; bottom: 4px;
@@ -1009,10 +1005,14 @@
 		if (container._jpFabHover) return;
 		container._jpFabHover = true;
 		const onMove = () => revealFabBriefly(FAB_IDLE_MS);
-		container.addEventListener('pointermove', onMove, { passive: true });
-		container.addEventListener('pointerenter', onMove, { passive: true });
+		// Capture phase + passive so we still see the move even if the player stops
+		// propagation on its own pointer handlers.
+		const opts = { capture: true, passive: true };
+		container.addEventListener('pointermove', onMove, opts);
+		container.addEventListener('pointerdown', onMove, opts);
+		container.addEventListener('pointerenter', onMove, opts);
 		// Hide a bit sooner when the pointer leaves the player entirely.
-		container.addEventListener('pointerleave', () => revealFabBriefly(400), { passive: true });
+		container.addEventListener('pointerleave', () => revealFabBriefly(400), opts);
 	}
 
 	// Renderer side: mount the overlay + 字 button inside the local player. Runs
@@ -1028,10 +1028,12 @@
 		const cs = getComputedStyle(container);
 		if (cs.position === 'static') container.style.position = 'relative';
 
-		// Adapters with no "controls visible" selector can't drive the button via
-		// CSS, so fall back to: show on mouse activity over the player, hide after
-		// it goes idle. (Panel-open and the initial 5s reveal keep it shown anyway.)
-		if (p && !p.adapter.controls) wireFabAutoHide(container);
+		// The 字 button auto-hides like the player's own controls: it appears on
+		// mouse activity over the player and hides once the pointer goes idle.
+		// (Panel-open and the initial 5s reveal keep it shown regardless.) This is
+		// driven in JS rather than off a per-player "controls visible" class, which
+		// is unreliable — many iframe embeds leave that class permanently on.
+		wireFabAutoHide(container);
 
 		if (!host || !container.contains(host)) {
 			host = document.createElement('div');
