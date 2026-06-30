@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Revolutions
 // @namespace    https://github.com/Inclushe/jimaku-player-revolutions
-// @version      3.8.4
+// @version      3.8.5
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
