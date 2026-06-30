@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Jimaku Player Revolutions
 // @namespace    https://github.com/Inclushe/jimaku-player-revolutions
-// @version      3.8.5
-// @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
+// @version      3.9.0
+// @description  Browse, download, and align Japanese subtitles inside any Vidstack, Video.js, Plyr, or JW Player video using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -113,21 +113,59 @@
 		ui: { panelOpen: false, tab: 'browse', loading: '', error: '' },
 	};
 
-	// Vidstack can render either as the <media-player> custom element or as a
-	// plain element carrying the data-media-player attribute (the data-* form is
-	// what sites using the CSS/default-layout build produce). Match both.
-	const PLAYER_SEL = 'media-player, [data-media-player]';
-	const PROVIDER_SEL = 'media-provider, [data-media-provider]';
-	function findVidstackPlayer() {
-		return document.querySelector(PLAYER_SEL);
+	// Player adapters. Each describes one kind of web video player: how to find
+	// its mount root, where its native captions render, and the selector (matched
+	// against the root) that is true while the player's own controls are visible.
+	// Adapters are tried in this order and the first player found on the page wins.
+	const PLAYER_ADAPTERS = [
+		{
+			// Vidstack: the <media-player> custom element, or the data-* form the
+			// CSS/default-layout build emits.
+			name: 'vidstack',
+			roots: ['media-player', '[data-media-player]'],
+			captions: ['media-captions', '.vds-captions', '[data-part="cue-display"]', '[data-part="captions"]'],
+			controls: '[data-controls]',
+		},
+		{
+			name: 'videojs',
+			roots: ['.video-js'],
+			captions: ['.vjs-text-track-display'],
+			controls: '.vjs-user-active',
+		},
+		{
+			name: 'plyr',
+			roots: ['.plyr'],
+			captions: ['.plyr__captions'],
+			controls: ':not(.plyr--hide-controls)',
+		},
+		{
+			name: 'jwplayer',
+			roots: ['.jwplayer'],
+			captions: ['.jw-captions'],
+			controls: ':not(.jw-flag-controls-hidden)',
+		},
+	];
+	// Every player root selector, for "is any player present" checks / diagnostics.
+	const ANY_PLAYER_SEL = PLAYER_ADAPTERS.flatMap((a) => a.roots).join(', ');
+
+	// The first player on the page, in adapter priority order.
+	// Returns { el, adapter } or null.
+	function findPlayer() {
+		for (const adapter of PLAYER_ADAPTERS) {
+			for (const sel of adapter.roots) {
+				const el = document.querySelector(sel);
+				if (el) return { el, adapter };
+			}
+		}
+		return null;
 	}
 	function getLocalVideo() {
-		const player = findVidstackPlayer();
-		if (player) {
-			const v = player.querySelector('video');
+		const p = findPlayer();
+		if (p) {
+			const v = p.el.querySelector('video');
 			if (v) return v;
 		}
-		return document.querySelector(PROVIDER_SEL + ' video') || document.querySelector('video');
+		return document.querySelector('video');
 	}
 	const seekTo = (timeMs) => {
 		const t = Math.max(0, timeMs);
@@ -167,7 +205,7 @@
 	// The candidate sources we read the show title from, in priority order.
 	// Logged on change (see refreshDetection) so it's clear which one is winning.
 	function titleSources() {
-		const player = findVidstackPlayer();
+		const player = findPlayer()?.el;
 		return {
 			'player[title]': clean(player?.getAttribute('title') || ''),
 			'player[aria-label]': clean(player?.getAttribute('aria-label') || ''),
@@ -186,7 +224,7 @@
 	function detectShow() {
 		const out = { showTitle: '', showKey: '', episodeNumber: null };
 
-		const player = findVidstackPlayer();
+		const player = findPlayer()?.el;
 		const candidates = [player?.getAttribute('title'), document.querySelector('h1')?.textContent]
 			.filter(Boolean)
 			.map(clean);
@@ -522,7 +560,7 @@
 	// never clobbers a file the user picked. Triggered on mount / detection change.
 	async function maybeAutoLoad() {
 		if (!state.autoSub || !state.apiKey) return;
-		if (!findVidstackPlayer()) return;
+		if (!findPlayer()) return;
 		const det = state.detected;
 		if (!det || !det.showTitle || det.episodeNumber == null) return; // need an episode to match
 		const key = autoKey(det);
@@ -570,11 +608,22 @@
 		}
 	}
 
-	// Only the Vidstack player element counts as a mount target, so the script
+	// Only a recognized player element counts as a mount target, so the script
 	// stays completely idle on every other site (we run on *://*/*).
 	function findPlayerContainer() {
-		return findVidstackPlayer();
+		return findPlayer()?.el || null;
 	}
+
+	// Generated from the adapters: hide every known player's native captions when
+	// the user opts in, and reveal the 字 button whenever a player's own controls
+	// are visible (root + the adapter's controls selector).
+	const HIDE_CAPTIONS_CSS = PLAYER_ADAPTERS
+		.flatMap((a) => a.captions)
+		.map((sel) => `html.jp-hide-native ${sel}`)
+		.join(',\n\t');
+	const FAB_CONTROLS_CSS = PLAYER_ADAPTERS
+		.flatMap((a) => a.roots.map((r) => `${r}${a.controls} #jp-fab`))
+		.join(',\n\t');
 
 	const STYLES = `
 	#jp-overlay {
@@ -610,8 +659,8 @@
 		font-family: "Yu Gothic", "Noto Sans JP", sans-serif;
 	}
 	#jp-host:hover #jp-fab, #jp-fab:focus-visible, #jp-fab.has-active, #jp-fab.reveal { opacity: 1; }
-	/* Vidstack sets data-controls on the player whenever its controls are visible */
-	[data-controls] #jp-fab { opacity: 1; }
+	/* Show the 字 button whenever the player's own controls are visible */
+	${FAB_CONTROLS_CSS} { opacity: 1; }
 	#jp-fab:hover { background: #e83450; }
 	#jp-fab.has-subs::after {
 		content: ''; position: absolute; right: 4px; bottom: 4px;
@@ -713,11 +762,8 @@
 		background: #2a2d3a; border-radius: 3px; padding: 1px 5px;
 	}
 
-	/* Hide Vidstack's native captions overlay when the user opts in */
-	html.jp-hide-native media-captions,
-	html.jp-hide-native .vds-captions,
-	html.jp-hide-native [data-part="cue-display"],
-	html.jp-hide-native [data-part="captions"] {
+	/* Hide each player's native captions overlay when the user opts in */
+	${HIDE_CAPTIONS_CSS} {
 		display: none;
 		opacity: 0;
 		visibility: hidden;
@@ -1684,10 +1730,10 @@
 		if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 		if (e.metaKey || e.ctrlKey || e.altKey) return;
 		// Bail if there's no player on the page right now (e.g. SPA navigated away).
-		if (!findVidstackPlayer()) return;
+		if (!findPlayer()) return;
 		const k = e.key.toLowerCase();
 		if (!'jshibzx'.includes(k)) return;
-		info('key', k, 'player=' + document.querySelectorAll(PLAYER_SEL).length, 'mounted=' + !!host);
+		info('key', k, 'player=' + document.querySelectorAll(ANY_PLAYER_SEL).length, 'mounted=' + !!host);
 		// Swallow the key before it bubbles to the player, unless disabled.
 		if (state.consumeKeys) {
 			e.preventDefault();
@@ -1733,10 +1779,11 @@
 		ensureMounted();
 		refreshDetection();
 
-		const hasPlayer = !!findVidstackPlayer();
+		const found = findPlayer();
+		const hasPlayer = !!found;
 		if (hasPlayer !== lastPlayerSeen) {
 			lastPlayerSeen = hasPlayer;
-			info(hasPlayer ? 'vidstack player detected' : 'vidstack player gone');
+			info(hasPlayer ? `${found.adapter.name} player detected` : 'player gone');
 			if (hasPlayer) state.videoFound = false; // bind the new instance's <video>
 		}
 		if (location.href !== lastHref) {
@@ -1748,12 +1795,11 @@
 		const now = Date.now();
 		if (now - _lastDiag > 3000) {
 			_lastDiag = now;
-			const mp = document.querySelectorAll(PLAYER_SEL).length;
-			const mpv = document.querySelectorAll(PROVIDER_SEL).length;
+			const mp = document.querySelectorAll(ANY_PLAYER_SEL).length;
 			const vid = document.querySelectorAll('video').length;
 			// Only chatter while something player-ish is around, or until we mount.
-			if (mp || mpv || vid || host) {
-				info('scan', 'media-player=' + mp, 'media-provider=' + mpv, 'video=' + vid, 'mounted=' + !!host);
+			if (mp || vid || host) {
+				info('scan', 'players=' + mp + ' (' + (found?.adapter.name || 'none') + ')', 'video=' + vid, 'mounted=' + !!host);
 			}
 		}
 	}

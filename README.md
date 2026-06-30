@@ -4,7 +4,7 @@
   <img src="assets/screenshot.jpg" alt="Jimaku Player Revolutions rendering a Japanese subtitle over a video">
 </p>
 
-A userscript that adds a Japanese-subtitle layer to **any site that uses [Vidstack Player](https://vidstack.io)**. It browses [jimaku.cc](https://jimaku.cc), downloads `.srt` / `.ass` / `.vtt` files for the show you're watching, and renders them on top of the video — synced with one keypress.
+A userscript that adds a Japanese-subtitle layer to **any site using a supported video player** — [Vidstack](https://vidstack.io), [Video.js](https://videojs.com), [Plyr](https://plyr.io), or [JW Player](https://jwplayer.com). It browses [jimaku.cc](https://jimaku.cc), downloads `.srt` / `.ass` / `.vtt` files for the show you're watching, and renders them on top of the video — synced with one keypress.
 
 Built for studying Japanese with anime.
 
@@ -16,17 +16,17 @@ Built for studying Japanese with anime.
 2. Install the userscript from Github
    - **[Open directly in Tampermonkey / Violentmonkey](https://github.com/Inclushe/jimaku-player-revolutions/raw/refs/heads/main/jimaku-player-revolutions.user.js)**
    - Or open `jimaku-player-revolutions.user.js` above and click **Raw**
-3. Open a website that uses Vidstack Player and click the **字** button.
+3. Open a website that uses a supported video player and click the **字** button.
 4. Add your Jimaku API key (free) in Settings.
    1. Open <https://jimaku.cc> and create an account.
    2. Go to <https://jimaku.cc/account> and copy your API key.
-   3. On any page with a Vidstack player, hover the player → click the small **字** button at the top-right → **Settings** tab → paste the key → **Save**.
+   3. On any page with a supported player, hover the player → click the small **字** button at the top-right → **Settings** tab → paste the key → **Save**.
 
-The script runs on every site (`@match *://*/*`) but stays completely idle until it detects a Vidstack `<media-player>` on the page, at which point the **字** button appears on the player. The Jimaku API is stored locally only, and is never sent anywhere except jimaku.cc itself.
+The script runs on every site (`@match *://*/*`) but stays completely idle until it detects a supported player (Vidstack, Video.js, Plyr, or JW Player) on the page, at which point the **字** button appears on the player. The Jimaku API is stored locally only, and is never sent anywhere except jimaku.cc itself.
 
 ## What it does
 
-- Activates automatically whenever a Vidstack `<media-player>` is present on the page.
+- Activates automatically whenever a supported player (Vidstack, Video.js, Plyr, or JW Player) is present on the page.
 - **Auto-finds and loads the right subtitle file for the current episode** (on by default) — searches jimaku.cc on load and picks the best match by parsing each result's filename. Toggle in Settings.
   - Excludes Chinese subtitle files (`[CHS]` / `[CHT]`) by default.
   - Sticks to the release group you first used for a show, so later episodes match it automatically (shown under Browse).
@@ -40,7 +40,7 @@ The script runs on every site (`@match *://*/*`) but stays completely idle until
 
 ## Use
 
-1. Open an episode on any site that uses Vidstack Player.
+1. Open an episode on any site that uses a supported video player.
 2. With **auto-load** on (the default), the script searches jimaku.cc and loads the best file for the detected episode automatically — you may not need to do anything. A toast confirms what was loaded.
 3. To choose manually: hover the player (top right corner) → click **字** (or press **`J`**) → **Browse** tab. The search box is pre-filled from the page title when possible; otherwise type the show name and episode. Pick a file from the list (WEB-tagged ones tend to align best with streaming sources).
 4. Subtitles appear at the bottom of the video.
@@ -90,7 +90,7 @@ Looking words up mid-episode is only half the loop — the other half is actuall
 
 ## Limitations
 
-- **Burned-in subtitles can't be removed.** If a site ships hard-subbed video, those stay. The script can hide Vidstack's own caption track (Settings → it disables the player's native captions), or you can move our subtitles to the top (Settings → Position).
+- **Burned-in subtitles can't be removed.** If a site ships hard-subbed video, those stay. The script can hide the player's own caption track (Settings → it disables the player's native captions), or you can move our subtitles to the top (Settings → Position).
 - **ASS positioning / styling is partially supported;** complex karaoke effects render plainly. Lines that overlap in time (including `.ass` lines sharing a start timestamp) are stacked and shown together.
 - **Auto-detection is best-effort.** The show name is guessed from the page title (`og:title` / `<h1>` / `<title>` / the player's `title` attribute), so on many sites you'll need to type the show + episode into the search box yourself.
 - **Provider must expose a `<video>` element.** HTML / HLS / DASH providers work; YouTube / Vimeo iframe providers don't expose a readable `<video>`, so time-sync won't work there.
@@ -100,11 +100,12 @@ Looking words up mid-episode is only half the loop — the other half is actuall
 
 The userscript is a single self-contained file at `jimaku-player-revolutions.user.js`. No build step. Edit it, save, refresh.
 
-It runs on every page (`@match *://*/*`) but does nothing until a Vidstack `<media-player>` is found. A single `watch()` loop — driven by a `MutationObserver`, history events (`popstate`/`hashchange`), and a 1s heartbeat — handles late-loading players and SPA sites that swap the player or change the URL between episodes without a reload. When a player appears (or a new episode is detected), it:
+It runs on every page (`@match *://*/*`) but does nothing until a supported player is found. Players are described by a small **adapter table** (`PLAYER_ADAPTERS`) near the top of the file — each entry lists the player's root selector(s), its native-caption selectors, and the selector that marks its controls as visible. `findPlayer()` returns the first matching player in priority order (Vidstack → Video.js → Plyr → JW Player); adding a player is just one more table entry. A single `watch()` loop — driven by a `MutationObserver`, history events (`popstate`/`hashchange`), and a 1s heartbeat — handles late-loading players and SPA sites that swap the player or change the URL between episodes without a reload. When a player appears (or a new episode is detected), it:
 
-- Mounts the UI (overlay, **字** button, panel) inside the `<media-player>` element.
-- Polls the underlying `<video>` element for the current time and to seek — this is the most reliable, sandbox-safe time source across providers.
-- Hides Vidstack's native captions (when enabled) by disabling the `<video>`'s text tracks and CSS-hiding the caption elements (`media-captions`, `[data-part="cue-display"]`).
+- Mounts the UI (overlay, **字** button, panel) inside the matched player's root element.
+- Polls the underlying `<video>` element for the current time and to seek — this is the most reliable, sandbox-safe time source across players.
+- Hides the player's native captions (when enabled) by disabling the `<video>`'s text tracks and CSS-hiding each adapter's caption elements (e.g. `media-captions`, `.vjs-text-track-display`, `.plyr__captions`, `.jw-captions`).
+- Shows the **字** button alongside the player's own controls (each adapter's controls selector, e.g. Vidstack's `[data-controls]` or Plyr's `:not(.plyr--hide-controls)`).
 - Talks to the jimaku.cc API via `GM_xmlhttpRequest`.
 
 State is stored in `localStorage` (`jp:*` keys) so it works in userscript managers that don't expose `GM_setValue` (notably Userscripts.app on Safari). Per-show data (alignment, chosen entry) is keyed on `hostname + show title`.
