@@ -74,6 +74,8 @@ That's the whole flow. Once a show is anchored, every subsequent episode loads w
 | `Z` | Subtitles earlier (−0.2s, Shift = −1s) |
 | `X` | Subtitles later (+0.2s, Shift = +1s) |
 
+By default these keys are **consumed** so they don't also trigger the player's own shortcuts (only these keys; everything else passes through). Toggle it in Settings. Settings also has a **Reset options to defaults** button (which keeps your API key and per-show sync).
+
 ### Click a line
 
 Clicking a rendered subtitle opens [jisho.org](https://jisho.org) for that text. Useful for looking up unknown words mid-episode.

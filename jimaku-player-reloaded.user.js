@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jimaku Player Reloaded
 // @namespace    https://github.com/Inclushe/Jimaku-Player-Reloaded
-// @version      3.7.4
+// @version      3.8.0
 // @description  Browse, download, and align Japanese subtitles inside any Vidstack-based player using jimaku.cc. Auto-finds the right file for the current episode.
 // @author       Inclushe (forked from repo by mgp25)
 // @match        *://*/*
@@ -39,11 +39,30 @@
 		fontWeight: 'jimaku-font-weight',
 		position: 'jimaku-position',
 		hideNative: 'jimaku-hide-native-subs',
+		consumeKeys: 'jimaku-consume-keys',
 		autoSub: 'jimaku-auto-sub',
 		excludeChinese: 'jimaku-exclude-chinese',
 		stickGroup: 'jimaku-stick-group',
 		groupByShow: 'jimaku-group-by-show',
 		customCss: 'jimaku-custom-css',
+	};
+	// Default values for the user-facing options, used by "Reset to defaults".
+	// Credentials (API key) and per-show data (alignment/entry/group caches) are
+	// intentionally excluded.
+	const DEFAULTS = {
+		preferAss: true,
+		fontScale: 1,
+		outline: 2,
+		bgOpacity: 0.35,
+		fontFamily: '',
+		fontWeight: 400,
+		position: 'bottom',
+		hideNative: true,
+		consumeKeys: true,
+		autoSub: true,
+		excludeChinese: true,
+		stickGroup: true,
+		customCss: '',
 	};
 	const get = (k, d) => {
 		try {
@@ -80,6 +99,7 @@
 		fontWeight: get(KEYS.fontWeight, 400),
 		position: get(KEYS.position, 'bottom'),
 		hideNative: get(KEYS.hideNative, true),
+		consumeKeys: get(KEYS.consumeKeys, true),
 		autoSub: get(KEYS.autoSub, true),
 		excludeChinese: get(KEYS.excludeChinese, true),
 		stickGroup: get(KEYS.stickGroup, true),
@@ -761,6 +781,21 @@
 		else root.removeProperty('--jp-font');
 	}
 
+	// Restore every user-facing option to its default and persist it.
+	function resetSettings() {
+		for (const [k, v] of Object.entries(DEFAULTS)) {
+			state[k] = v;
+			if (KEYS[k]) set(KEYS[k], v);
+		}
+		state.ui.cssDraft = undefined;
+		applyStyleVars();
+		applyCustomCss();
+		applyHideNative();
+		if (overlay) overlay.className = state.position;
+		renderPanel();
+		toast('Settings reset to defaults');
+	}
+
 	// User-supplied CSS, injected into its own <style> so it can target our
 	// overlay/panel or the host page's player. Re-applied whenever it changes.
 	function applyCustomCss() {
@@ -1126,6 +1161,9 @@
 
 				<label class="row" style="margin-top:8px"><input type="checkbox" id="jp-prefer-ass" ${state.preferAss ? 'checked' : ''}> Prefer ASS files when available</label>
 
+				<label class="row" style="margin-top:8px"><input type="checkbox" id="jp-consume-keys" ${state.consumeKeys ? 'checked' : ''}> Consume Jimaku's hotkeys (don't pass them to the player)</label>
+				<p class="muted">Stops the <kbd>J</kbd> <kbd>S</kbd> <kbd>B</kbd> <kbd>H</kbd> <kbd>I</kbd> <kbd>Z</kbd> <kbd>X</kbd> keys from also triggering the player's own shortcuts. Other keys are unaffected.</p>
+
 				<div style="margin-top:12px;border-top:1px solid #2c2c3a;padding-top:10px;font-weight:700">Style</div>
 
 				<label id="jp-scale-label">Font size (${Math.round(state.fontScale * 100)}%)</label>
@@ -1162,6 +1200,11 @@
 				<div class="row">
 					<button class="btn primary" id="jp-save-css">Apply CSS</button>
 					<span class="muted" style="flex:1">Applied live and saved locally.</span>
+				</div>
+
+				<div style="margin-top:12px;border-top:1px solid #2c2c3a;padding-top:10px">
+					<button class="btn" id="jp-reset-settings">Reset options to defaults</button>
+					<span class="muted" style="margin-left:8px">Keeps your API key and per-show sync.</span>
 				</div>
 
 				<p class="muted">Hotkeys: <kbd>S</kbd> sync · <kbd>B</kbd> rewind to last sub · <kbd>J</kbd> open panel · <kbd>H</kbd> hide subs · <kbd>I</kbd> flip position · <kbd>Z</kbd>/<kbd>X</kbd> nudge ±0.2s (Shift = ±1s).</p>
@@ -1239,6 +1282,11 @@
 				set(KEYS.preferAss, state.preferAss);
 				renderPanel();
 			});
+			panel.querySelector('#jp-consume-keys')?.addEventListener('change', (ev) => {
+				state.consumeKeys = ev.target.checked;
+				set(KEYS.consumeKeys, state.consumeKeys);
+			});
+			panel.querySelector('#jp-reset-settings')?.addEventListener('click', resetSettings);
 			const cssBox = panel.querySelector('#jp-custom-css');
 			cssBox?.addEventListener('input', () => (state.ui.cssDraft = cssBox.value));
 			panel.querySelector('#jp-save-css')?.addEventListener('click', () => {
@@ -1594,12 +1642,18 @@
 		toast._t = setTimeout(() => (toastEl.style.opacity = '0'), 1800);
 	}
 
+	// Registered in the capture phase so we can stop Jimaku's own hotkeys from
+	// reaching the player's keyboard handler (Vidstack binds many single letters).
 	document.addEventListener('keydown', (e) => {
 		if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 		if (e.metaKey || e.ctrlKey || e.altKey) return;
 		const k = e.key.toLowerCase();
-		if ('jshibzx'.includes(k)) {
-			info('key', k, 'player=' + document.querySelectorAll(PLAYER_SEL).length, 'mounted=' + !!host);
+		if (!'jshibzx'.includes(k)) return;
+		info('key', k, 'player=' + document.querySelectorAll(PLAYER_SEL).length, 'mounted=' + !!host);
+		// Swallow the key before it bubbles to the player, unless disabled.
+		if (state.consumeKeys && findVidstackPlayer()) {
+			e.preventDefault();
+			e.stopImmediatePropagation();
 		}
 		if (k === 'j') {
 			ensureMounted();
@@ -1620,7 +1674,7 @@
 		} else if (k === 'x') {
 			adjustAlignment(e.shiftKey ? 1000 : 200);
 		}
-	});
+	}, true);
 
 	// Single watcher driving everything. Vidstack often mounts late, and SPA
 	// sites swap the player / change the URL between episodes without a reload —
