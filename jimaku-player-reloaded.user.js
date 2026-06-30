@@ -1131,14 +1131,14 @@
 				<div class="align-grid">
 					<button class="btn" data-shift="-1000">−1.0s (subs earlier)</button>
 					<button class="btn" data-shift="1000">+1.0s (subs later)</button>
-					<button class="btn" data-shift="-200">−0.2s</button>
-					<button class="btn" data-shift="200">+0.2s</button>
+					<button class="btn" data-shift="-100">−0.1s</button>
+					<button class="btn" data-shift="100">+0.1s</button>
 				</div>
 				<div class="row">
 					<button class="btn" id="jp-reset-align">Reset to 0</button>
 					<button class="btn" id="jp-rewind">⏪ Rewind to last sub <kbd>B</kbd></button>
 				</div>
-				<p class="muted">Hotkeys: <kbd>Z</kbd>/<kbd>X</kbd> nudge ±0.2s · with <kbd>Shift</kbd> ±1s.</p>
+				<p class="muted">Hotkeys: <kbd>Z</kbd>/<kbd>X</kbd> nudge ±0.1s · with <kbd>Shift</kbd> ±1s.</p>
 			</div>`;
 	}
 
@@ -1207,7 +1207,7 @@
 					<span class="muted" style="margin-left:8px">Keeps your API key and per-show sync.</span>
 				</div>
 
-				<p class="muted">Hotkeys: <kbd>S</kbd> sync · <kbd>B</kbd> rewind to last sub · <kbd>J</kbd> open panel · <kbd>H</kbd> hide subs · <kbd>I</kbd> flip position · <kbd>Z</kbd>/<kbd>X</kbd> nudge ±0.2s (Shift = ±1s).</p>
+				<p class="muted">Hotkeys: <kbd>S</kbd> sync · <kbd>B</kbd> rewind to last sub · <kbd>J</kbd> open panel · <kbd>H</kbd> hide subs · <kbd>I</kbd> flip position · <kbd>Z</kbd>/<kbd>X</kbd> nudge ±0.1s (Shift = ±1s).</p>
 			</div>`;
 	}
 
@@ -1695,9 +1695,9 @@
 		} else if (k === 'b') {
 			rewindToLastSub();
 		} else if (k === 'z') {
-			adjustAlignment(e.shiftKey ? -1000 : -200);
+			adjustAlignment(e.shiftKey ? -1000 : -100);
 		} else if (k === 'x') {
-			adjustAlignment(e.shiftKey ? 1000 : 200);
+			adjustAlignment(e.shiftKey ? 1000 : 100);
 		}
 	}, true);
 
